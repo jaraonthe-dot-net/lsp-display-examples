@@ -1,6 +1,7 @@
 package net.jaraonthe.java.lsp_display_examples;
 
 import org.eclipse.lsp4j.*;
+import org.eclipse.lsp4j.jsonrpc.messages.Either;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -79,22 +80,26 @@ public final class ExamplesTokenizer
 
     /**
      * Provides the file content for an example file which showcases every
-     * semantic token type and modifier.
+     * semantic token type but no modifiers.
      */
-    public static String getExample(boolean withModifiers)
+    public static String getTypesExample()
     {
-        if (!withModifiers) {
-            return String.join("\n", ALL_TOKEN_TYPES) + "\n";
-        }
+        return String.join("\n", ALL_TOKEN_TYPES) + "\n";
+    }
 
+    /**
+     * Provides the file content for an example file which showcases every
+     * semantic token type combined with each of the modifiers (but no more than
+     * one modifier at a time).
+     */
+    public static String getExampleWithSingleModifiers()
+    {
         int maxLength = ALL_TOKEN_TYPES.stream().map(String::length)
             .reduce(Math::max).orElse(0);
 
         return ALL_TOKEN_TYPES.stream().map((t) -> {
             String padding = " ".repeat(maxLength - t.length() + 2);
-            return t + padding + ALL_TOKEN_MODIFIERS.stream().map((m) ->
-                t + ":" + m
-            ).collect(Collectors.joining(padding));
+            return t + ":" + padding + String.join("  ", ALL_TOKEN_MODIFIERS);
         }).collect(Collectors.joining("\n")) + "\n";
     }
 
@@ -167,96 +172,228 @@ public final class ExamplesTokenizer
     {
         List<Integer> tokens = new ArrayList<>();
         List<Diagnostic> diagnostics = new ArrayList<>();
-        int absoluteLine = 0;
-        int deltaLine = 0;
+        int previousLine = 0;
         int previousStart = 0;
+        Scanner s = new Scanner(textLines);
+        List<String> unsupportedModifiers = new ArrayList<>(ALL_TOKEN_MODIFIERS.size());
 
-        for (String line : textLines) {
-            for (int i = 0; i < line.length(); i++) {
-                if (!Character.isAlphabetic(line.charAt(i))) {
+        while (s.next()) {
+            Integer typeNumber = tokenTypesMap.get(s.tokenType);
+
+            int modifiers = 0;
+            unsupportedModifiers.clear();
+            for (String tokenModifier : s.tokenModifiers) {
+                Integer modifierFlag = tokenModifiersMap.get(tokenModifier);
+                if (modifierFlag == null) {
+                    unsupportedModifiers.add(tokenModifier);
                     continue;
                 }
-
-                // Consume type
-                int start = i;
-                for (; i < line.length() && Character.isAlphabetic(line.charAt(i)); i++);
-                int end = i; // exclusive
-
-                String typeKeyword = line.substring(start, end).toLowerCase();
-                String tokenType = ALL_TOKEN_TYPES_LOWERCASE.get(typeKeyword);
-                if (tokenType == null) {
-                    continue;
-                }
-                Integer typeNumber = tokenTypesMap.get(tokenType);
-                if (typeNumber == null) {
-                    var d = new Diagnostic(
-                        new Range(new Position(absoluteLine, start), new Position(absoluteLine, end)),
-                        "Client does not support " + tokenType
-                    );
-                    d.setSeverity(DiagnosticSeverity.Warning);
-                    diagnostics.add(d);
-                    continue;
-                }
-                int modifiers = 0;
-
-                // Consume modifiers
-                while (i < line.length() && isModifierSeparator(line.charAt(i))) {
-                    // Consume modifier word
-                    i++;
-                    int modifierStart = i;
-                    for (; i < line.length() && Character.isAlphabetic(line.charAt(i)); i++);
-                    int modifierEnd = i; // exclusive
-
-                    String modifierKeyword = line.substring(modifierStart, modifierEnd).toLowerCase();
-                    String tokenModifier = ALL_TOKEN_MODIFIERS_LOWERCASE.get(modifierKeyword);
-                    if (tokenModifier == null) {
-                        i = end; // Rewind
-                        break;
-                    }
-                    Integer modifierFlag = tokenModifiersMap.get(tokenModifier);
-                    if (modifierFlag == null) {
-                        var d = new Diagnostic(
-                            new Range(new Position(absoluteLine, modifierStart), new Position(absoluteLine, modifierEnd)),
-                            "Client does not support " + tokenModifier
-                        );
-                        d.setSeverity(DiagnosticSeverity.Warning);
-                        diagnostics.add(d);
-
-                        i = end; // Rewind
-                        break;
-                    }
-
-                    modifiers += modifierFlag;
-                    end = modifierEnd;
-                }
-
-                // deltaLine, deltaStart, length, tokenType, tokenModifiers
-                tokens.add(deltaLine);
-                tokens.add(start - previousStart);
-                tokens.add(end - start);
-                tokens.add(typeNumber);
-                tokens.add(modifiers);
-
-                deltaLine = 0;
-                previousStart = start;
+                modifiers += modifierFlag;
             }
 
-            absoluteLine++;
-            deltaLine++;
-            previousStart = 0;
+            if (typeNumber == null || !unsupportedModifiers.isEmpty()) {
+                String message = "Client does not support ";
+                if (typeNumber == null) {
+                    message += "type " + s.tokenType;
+                    if (!unsupportedModifiers.isEmpty()) {
+                        message += "and ";
+                    }
+                }
+                if (!unsupportedModifiers.isEmpty()) {
+                    message += "modifiers " + String.join(", ", unsupportedModifiers);
+                }
+
+                var d = new Diagnostic(
+                    new Range(new Position(s.line, s.startCol), new Position(s.line, s.endCol)),
+                    message
+                );
+                d.setSeverity(DiagnosticSeverity.Warning);
+                diagnostics.add(d);
+
+                if (typeNumber == null) {
+                    continue;
+                }
+            }
+
+            int deltaLine = s.line - previousLine;
+            previousLine = s.line;
+            if (deltaLine != 0) {
+                previousStart = 0;
+            }
+            int deltaStart = s.startCol - previousStart;
+            previousStart = s.startCol;
+
+            // deltaLine, deltaStart, length, tokenType, tokenModifiers
+            tokens.add(deltaLine);
+            tokens.add(deltaStart);
+            tokens.add(s.endCol - s.startCol);
+            tokens.add(typeNumber);
+            tokens.add(modifiers);
         }
 
         return new Result(tokens, diagnostics);
     }
 
-    private boolean isModifierSeparator(char c)
+    public Hover getHover(List<String> textLines, int line, int col)
     {
-        for (char ms : MODIFIER_SEPARATORS) {
-            if (c == ms) {
-                return true;
+        Scanner s = new Scanner(textLines);
+        while (s.next() && s.line <= line) {
+            if (s.line != line || s.endCol <= col) {
+                continue;
             }
+            if (s.startCol > col) {
+                break;
+            }
+
+            String message = "Type: " + s.tokenType;
+            if (!s.tokenModifiers.isEmpty()) {
+                message += ", Modifiers: " + String.join(", ", s.tokenModifiers);
+            }
+
+            var hover = new Hover(Either.forLeft(message));
+            hover.setRange(new Range(
+                new Position(s.line, s.startCol),
+                new Position(s.line, s.endCol)
+            ));
+            return hover;
         }
-        return false;
+
+        return null;
+    }
+
+
+    private static class Scanner
+    {
+        private final List<String> textLines;
+
+        private String lockedTokenType = null;
+        private final Set<String> lockedTokenModifiers = new HashSet<>();
+
+        /**
+         * Current line number. 0-based.
+         */
+        int line = 0;
+        /**
+         * Start position on the line. 0-based.
+         */
+        int startCol = 0;
+        /**
+         * End position on the line. 0-based, exclusive.
+         */
+        int endCol = 0; // exclusive
+        String tokenType = null;
+        final Set<String> tokenModifiers = new HashSet<>();
+        boolean isBasedOnLockedToken = false;
+
+        Scanner(List<String> textLines)
+        {
+            this.textLines = textLines;
+        }
+
+        /**
+         * Yields the next token. The actual token information is made available
+         * through various {@code Scanner} properties.
+         *
+         * @return True: A new token was parsed. False: Nothing more to parse.
+         */
+        public boolean next()
+        {
+            clear();
+            for (; line < textLines.size(); line++) {
+                String textLine = textLines.get(line);
+                for (int j = endCol; j < textLine.length(); j++) {
+                    if (!Character.isAlphabetic(textLine.charAt(j))) {
+                        continue;
+                    }
+
+                    // Consume type
+                    startCol = j;
+                    for (; j < textLine.length() && Character.isAlphabetic(textLine.charAt(j)); j++) ;
+                    endCol = j;
+
+                    tokenType = ALL_TOKEN_TYPES_LOWERCASE.get(
+                        textLine.substring(startCol, endCol).toLowerCase()
+                    );
+                    tokenModifiers.clear();
+                    isBasedOnLockedToken = false;
+
+                    if (tokenType == null) {
+                        if (lockedTokenType == null) {
+                            continue;
+                        }
+                        // We have a locked token type & modifier, let's go ahead
+                        // and see if we can parse a modifier below
+                        tokenType = lockedTokenType;
+                        tokenModifiers.addAll(lockedTokenModifiers);
+                        isBasedOnLockedToken = true;
+                        endCol = j = startCol;
+                    }
+
+                    // Consume modifiers
+                    while (j < textLine.length() && (isModifierSeparator(textLine.charAt(j)) || isBasedOnLockedToken)) {
+                        if (!isBasedOnLockedToken || endCol != startCol) {
+                            // I.e. Opposite of: parsing first modifier when having a locked token
+                            j++;
+                        }
+                        int modifierStart = j;
+                        for (; j < textLine.length() && Character.isAlphabetic(textLine.charAt(j)); j++) ;
+                        int modifierEnd = j; // exclusive
+
+                        if (
+                            modifierEnd == modifierStart
+                            && Character.isWhitespace(textLine.charAt(j))
+                            && !isBasedOnLockedToken
+                        ) {
+                            // Ending in modifier separator followed by whitespace
+                            // - lock this token type & modifier. I.e. it will be
+                            // applied to all subsequent modifier-only tokens.
+                            lockedTokenType = tokenType;
+                            lockedTokenModifiers.clear();
+                            lockedTokenModifiers.addAll(tokenModifiers);
+                        }
+
+                        String tokenModifier = ALL_TOKEN_MODIFIERS_LOWERCASE.get(
+                            textLine.substring(modifierStart, modifierEnd).toLowerCase()
+                        );
+                        if (tokenModifier == null) {
+                            j = endCol; // Rewind
+                            break;
+                        }
+
+                        tokenModifiers.add(tokenModifier);
+                        endCol = modifierEnd;
+                    }
+
+                    if (isBasedOnLockedToken && endCol == startCol) {
+                        // locked type and no modifier parsed - skip
+                        continue;
+                    }
+                    return true;
+                }
+                startCol = endCol = 0;
+            }
+
+            // Nothing more to parse
+            clear();
+            return false;
+        }
+
+        private void clear()
+        {
+            tokenType = null;
+            tokenModifiers.clear();
+            isBasedOnLockedToken = false;
+        }
+
+        private boolean isModifierSeparator(char c)
+        {
+            for (char ms : MODIFIER_SEPARATORS) {
+                if (c == ms) {
+                    return true;
+                }
+            }
+            return false;
+        }
     }
 
 

@@ -125,13 +125,56 @@ class ExamplesTextDocumentService implements TextDocumentService
     }
 
     @Override
+    public CompletableFuture<Hover> hover(HoverParams params)
+    {
+        log.debug(">> hover: {}", params);
+        return CompletableFuture.supplyAsync(() -> {
+            Document document = getDocument(params.getTextDocument().getUri());
+            if (document == null) {
+                throw new ResponseErrorException(new ResponseError(
+                    ResponseErrorCode.RequestFailed,
+                    "Requested hover for a document that is not open.",
+                    null
+                ));
+            }
+
+            Hover hover = null;
+            if (tokenizer != null) {
+                hover = tokenizer.getHover(
+                    document.getTextLines(),
+                    params.getPosition().getLine(),
+                    params.getPosition().getCharacter()
+                );
+            }
+
+            log.debug("<<- hover: {}", hover);
+            return hover;
+        });
+    }
+
+    @Override
     public CompletableFuture<List<Either<Command, CodeAction>>> codeAction(CodeActionParams params)
     {
         log.debug(">> codeAction: {}", params);
         return CompletableFuture.supplyAsync(() -> {
             List<Either<Command, CodeAction>> data = new ArrayList<>(1);
+            // Observation: VSCode does only ask for code actions if there is
+            //              some non-whitespace text it considers worthwhile
 
-            // TODO Any code action?
+            // Show "Generate Example" code actions if file is empty
+            String uri = params.getTextDocument().getUri();
+            if (getDocument(uri).getText().isBlank()) {
+                data.add(Either.forRight(createGenerateAction(
+                    "(Generate example)",
+                    ExamplesTokenizer.getTypesExample(),
+                    uri
+                )));
+                data.add(Either.forRight(createGenerateAction(
+                    "(Generate with modifiers)",
+                    ExamplesTokenizer.getExampleWithSingleModifiers(),
+                    uri
+                )));
+            }
 
             log.debug("<< codeAction: {}", data);
             return data;
@@ -144,23 +187,38 @@ class ExamplesTextDocumentService implements TextDocumentService
         log.debug(">> inlayHint: {}", params);
         return CompletableFuture.supplyAsync(() -> {
             List<InlayHint> data = new ArrayList<>(1);
+            // Observation: IntelliJ does not support activating the hints in
+            //              any way, thus making this useless
 
-            // Show "Generate Example" inlay hint if file is empty
+            // Show "Generate Example" inlay hints if file is empty
             String uri = params.getTextDocument().getUri();
             if (getDocument(uri).getText().isBlank()) {
                 data.add(createGenerateHint(
                     "(Generate example)",
-                    ExamplesTokenizer.getExample(false)
+                    ExamplesTokenizer.getTypesExample()
                 ));
                 data.add(createGenerateHint(
                     "(Generate with modifiers)",
-                    ExamplesTokenizer.getExample(true)
+                    ExamplesTokenizer.getExampleWithSingleModifiers()
                 ));
             }
 
             log.debug("<< inlayHint: {}", data);
             return data;
         });
+    }
+
+    private CodeAction createGenerateAction(String title, String generatedText, String uri)
+    {
+        var action = new CodeAction(title);
+        action.setEdit(new WorkspaceEdit(Map.of(
+            uri,
+            List.of(new TextEdit(
+                new Range(new Position(0, 0), new Position(0, 0)),
+                generatedText
+            ))
+        )));
+        return action;
     }
 
     private InlayHint createGenerateHint(String label, String generatedText)

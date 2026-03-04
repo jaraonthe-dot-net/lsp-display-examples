@@ -177,9 +177,17 @@ public class ExamplesLanguageServer
             false // range
         ));
 
+        // Publish Diagnostics
         if (clientTdc.getPublishDiagnostics() == null) {
             log.warn("Client does not support publishDiagnostics feature");
             return;
+        }
+
+        // Hover
+        if (clientTdc.getHover() != null) {
+            c.setHoverProvider(true);
+        } else {
+            log.warn("Client does not support Hover feature");
         }
 
         // Code Actions
