@@ -1,0 +1,12 @@
+<configuration>
+    <appender name="STDIO" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+        <target>System.out</target>
+    </appender>
+
+    <root level="debug">
+        <appender-ref ref="STDIO"/>
+    </root>
+</configuration>
