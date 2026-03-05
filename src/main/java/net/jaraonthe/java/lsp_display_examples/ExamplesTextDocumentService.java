@@ -1,9 +1,6 @@
 package net.jaraonthe.java.lsp_display_examples;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
 import org.eclipse.lsp4j.*;
@@ -139,12 +136,25 @@ class ExamplesTextDocumentService implements TextDocumentService
             }
 
             Hover hover = null;
-            if (tokenizer != null) {
-                hover = tokenizer.getHover(
-                    document.getTextLines(),
-                    params.getPosition().getLine(),
-                    params.getPosition().getCharacter()
-                );
+            String uri = document.getUri();
+            if (shouldDisplayActions(uri) && params.getPosition().getLine() == 0) {
+                hover = new Hover(Either.forLeft(
+                    "Fills this file with semantic token examples: 1) only "
+                    + "token types; 2) with modifiers; 3) with all possible "
+                    + "modifier combinations"
+                ));
+                hover.setRange(new Range(
+                    new Position(0, 0),
+                    new Position(1, 0)
+                ));
+            } else {
+                if (tokenizer != null) {
+                    hover = tokenizer.getHover(
+                        document.getTextLines(),
+                        params.getPosition().getLine(),
+                        params.getPosition().getCharacter()
+                    );
+                }
             }
 
             log.debug("<<- hover: {}", hover);
@@ -163,7 +173,10 @@ class ExamplesTextDocumentService implements TextDocumentService
 
             // Show "Generate Example" code actions if file is empty
             String uri = params.getTextDocument().getUri();
-            if (getDocument(uri).getText().isBlank()) {
+            if (
+                shouldDisplayActions(uri)
+                && (params.getRange().getStart().getLine() <= 0 || getDocument(uri).getText().isBlank())
+            ) {
                 data.add(Either.forRight(createGenerateAction(
                     "(Generate example)",
                     ExamplesTokenizer.getTypesExample(),
@@ -172,6 +185,11 @@ class ExamplesTextDocumentService implements TextDocumentService
                 data.add(Either.forRight(createGenerateAction(
                     "(Generate with modifiers)",
                     ExamplesTokenizer.getExampleWithSingleModifiers(),
+                    uri
+                )));
+                data.add(Either.forRight(createGenerateAction(
+                    "(Generate with all modifiers)",
+                    ExamplesTokenizer.getExampleWithAllModifierCombinations(),
                     uri
                 )));
             }
@@ -192,20 +210,31 @@ class ExamplesTextDocumentService implements TextDocumentService
 
             // Show "Generate Example" inlay hints if file is empty
             String uri = params.getTextDocument().getUri();
-            if (getDocument(uri).getText().isBlank()) {
+            if (shouldDisplayActions(uri)) {
+                // Keeping labels short so they are all displayed (VSCode)
+                // - for this we show a hover as well (see above)
                 data.add(createGenerateHint(
-                    "(Generate example)",
+                    "(Example)",
                     ExamplesTokenizer.getTypesExample()
                 ));
                 data.add(createGenerateHint(
-                    "(Generate with modifiers)",
+                    "(...modifiers)",
                     ExamplesTokenizer.getExampleWithSingleModifiers()
+                ));
+                data.add(createGenerateHint(
+                    "(...all combinations)",
+                    ExamplesTokenizer.getExampleWithAllModifierCombinations()
                 ));
             }
 
             log.debug("<< inlayHint: {}", data);
             return data;
         });
+    }
+
+    private boolean shouldDisplayActions(String uri)
+    {
+        return Optional.of(getDocument(uri).getTextLines().getFirst()).orElse("").isBlank();
     }
 
     private CodeAction createGenerateAction(String title, String generatedText, String uri)
@@ -215,7 +244,7 @@ class ExamplesTextDocumentService implements TextDocumentService
             uri,
             List.of(new TextEdit(
                 new Range(new Position(0, 0), new Position(0, 0)),
-                generatedText
+                "\n" + generatedText
             ))
         )));
         return action;
@@ -229,7 +258,7 @@ class ExamplesTextDocumentService implements TextDocumentService
         );
         hint.setTextEdits(List.of(new TextEdit(
             new Range(new Position(0, 0), new Position(0, 0)),
-            generatedText
+            "\n" + generatedText
         )));
         hint.setPaddingLeft(true);
         hint.setPaddingRight(true);

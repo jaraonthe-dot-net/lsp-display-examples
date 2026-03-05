@@ -21,11 +21,13 @@ public final class ExamplesTokenizer
     private static final Logger log = LoggerFactory.getLogger(ExamplesTokenizer.class);
 
     public static final char[] MODIFIER_SEPARATORS = {':', '.', '_'};
+    public static final char ALL_MODIFIERS_OPERATOR = '|';
     public static final List<String> ALL_TOKEN_TYPES;
     public static final List<String> ALL_TOKEN_MODIFIERS;
 
     private static final Map<String, String> ALL_TOKEN_TYPES_LOWERCASE;
     private static final Map<String, String> ALL_TOKEN_MODIFIERS_LOWERCASE;
+    private static final List<Set<String>> ALL_MODIFIER_COMBINATIONS;
 
     /**
      * Maps token type string (as used in {@code ALL_TOKEN_TYPES}) to their
@@ -46,6 +48,21 @@ public final class ExamplesTokenizer
 
         ALL_TOKEN_TYPES_LOWERCASE = lowercaseMap(ALL_TOKEN_TYPES);
         ALL_TOKEN_MODIFIERS_LOWERCASE = lowercaseMap(ALL_TOKEN_MODIFIERS);
+
+        List<Set<String>> allModifierCombinations = new ArrayList<>(1 << ALL_TOKEN_MODIFIERS.size());
+        allModifierCombinations.add(Set.of());
+        for (String modifier : ALL_TOKEN_MODIFIERS) {
+
+            // Add new modifier to copies of all existing sets
+            List<Set<String>> newCombinations = new ArrayList<>(allModifierCombinations.size());
+            for (Set<String> existingSet : allModifierCombinations) {
+                Set<String> newSet = new HashSet<>(existingSet);
+                newSet.add(modifier);
+                newCombinations.add(Collections.unmodifiableSet(newSet));
+            }
+            allModifierCombinations.addAll(newCombinations);
+        }
+        ALL_MODIFIER_COMBINATIONS = Collections.unmodifiableList(allModifierCombinations);
     }
 
     private static List<String> allStringConstantValues(Class<?> clazz)
@@ -94,13 +111,34 @@ public final class ExamplesTokenizer
      */
     public static String getExampleWithSingleModifiers()
     {
-        int maxLength = ALL_TOKEN_TYPES.stream().map(String::length)
+        int maxTypeLength = ALL_TOKEN_TYPES.stream().map(String::length)
             .reduce(Math::max).orElse(0);
 
         return ALL_TOKEN_TYPES.stream().map((t) -> {
-            String padding = " ".repeat(maxLength - t.length() + 2);
+            String padding = " ".repeat(maxTypeLength - t.length() + 2);
             return t + ":" + padding + String.join("  ", ALL_TOKEN_MODIFIERS);
         }).collect(Collectors.joining("\n")) + "\n";
+    }
+
+    /**
+     * Provides the file content for an example file which showcases every
+     * semantic token type combined with all possible modifier combinations
+     * (utilizing the | operator).
+     */
+    public static String getExampleWithAllModifierCombinations()
+    {
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < 1 << ALL_TOKEN_MODIFIERS.size(); i++) {
+            // Append a-z continuously
+            builder.append((char) ('a' + (i % ('z' - 'a' + 1))));
+        }
+        String placeholders = builder.toString();
+        int maxTypeLength = ALL_TOKEN_TYPES.stream().map(String::length)
+            .reduce(Math::max).orElse(0);
+
+        return ALL_TOKEN_TYPES.stream().map((t) ->
+            " ".repeat(maxTypeLength - t.length()) + t + ALL_MODIFIERS_OPERATOR + placeholders
+        ).collect(Collectors.joining("\n")) + "\n";
     }
 
 
@@ -177,7 +215,21 @@ public final class ExamplesTokenizer
         Scanner s = new Scanner(textLines);
         List<String> unsupportedModifiers = new ArrayList<>(ALL_TOKEN_MODIFIERS.size());
 
-        while (s.next()) {
+        while (true) {
+            try {
+                if (!s.next()) {
+                    break;
+                }
+            } catch (PrematureLineEndingException e) {
+                var d = new Diagnostic(
+                    new Range(new Position(e.line, e.col), new Position(e.line, e.col)),
+                    "Line is too short to showcase all modifier combinations.\nPlease add more text."
+                );
+                d.setSeverity(DiagnosticSeverity.Error);
+                diagnostics.add(d);
+                continue;
+            }
+
             Integer typeNumber = tokenTypesMap.get(s.tokenType);
 
             int modifiers = 0;
@@ -237,7 +289,7 @@ public final class ExamplesTokenizer
     public Hover getHover(List<String> textLines, int line, int col)
     {
         Scanner s = new Scanner(textLines);
-        while (s.next() && s.line <= line) {
+        while (s.nextIgnore() && s.line <= line) {
             if (s.line != line || s.endCol <= col) {
                 continue;
             }
@@ -285,6 +337,9 @@ public final class ExamplesTokenizer
         final Set<String> tokenModifiers = new HashSet<>();
         boolean isBasedOnLockedToken = false;
 
+        private Integer allModifiersStartCol = null;
+        private String allModifiersTokenType = null;
+
         Scanner(List<String> textLines)
         {
             this.textLines = textLines;
@@ -294,14 +349,54 @@ public final class ExamplesTokenizer
          * Yields the next token. The actual token information is made available
          * through various {@code Scanner} properties.
          *
+         * <p>Opposed to {@link Scanner#next()}, this will not throw an
+         * {@link PrematureLineEndingException}.
+         *
          * @return True: A new token was parsed. False: Nothing more to parse.
          */
-        public boolean next()
+        public boolean nextIgnore()
+        {
+            while (true) {
+                try {
+                    return next();
+                } catch (PrematureLineEndingException e) {
+                    // Nothing
+                }
+            }
+        }
+
+        /**
+         * Yields the next token. The actual token information is made available
+         * through various {@code Scanner} properties.
+         *
+         * @return True: A new token was parsed. False: Nothing more to parse.
+         * @throws PrematureLineEndingException If an all-modifier-combinations sections is parsed but
+         *                                      cut short by a premature line ending
+         */
+        public boolean next() throws PrematureLineEndingException
         {
             clear();
             for (; line < textLines.size(); line++) {
                 String textLine = textLines.get(line);
                 for (int j = endCol; j < textLine.length(); j++) {
+                    if (allModifiersStartCol != null) {
+                        // Providing token for one part of an all-modifier-combinations section
+                        if (j - allModifiersStartCol < ALL_MODIFIER_COMBINATIONS.size()) {
+                            if (j < allModifiersStartCol) {
+                                continue;
+                            }
+                            tokenType = allModifiersTokenType;
+                            tokenModifiers.clear();
+                            tokenModifiers.addAll(ALL_MODIFIER_COMBINATIONS.get(j - allModifiersStartCol));
+                            startCol = j;
+                            j++;
+                            endCol = j;
+                            return true;
+                        }
+                        // Done with all combinations, let's continue normally
+                        allModifiersStartCol = null;
+                    }
+
                     if (!Character.isAlphabetic(textLine.charAt(j))) {
                         continue;
                     }
@@ -327,6 +422,13 @@ public final class ExamplesTokenizer
                         tokenModifiers.addAll(lockedTokenModifiers);
                         isBasedOnLockedToken = true;
                         endCol = j = startCol;
+                    } else if (j < textLine.length() && textLine.charAt(j) == ALL_MODIFIERS_OPERATOR) {
+                        // This is an all-modifier-combinations section
+                        allModifiersTokenType = tokenType;
+                        j++;
+                        allModifiersStartCol = j;
+                        // The main token before '|'
+                        return true;
                     }
 
                     // Consume modifiers
@@ -370,6 +472,14 @@ public final class ExamplesTokenizer
                     }
                     return true;
                 }
+                // Line end reached
+                if (allModifiersStartCol != null) {
+                    if (textLine.length() < allModifiersStartCol + ALL_MODIFIER_COMBINATIONS.size()) {
+                        allModifiersStartCol = null;
+                        throw new PrematureLineEndingException(line, textLine.length());
+                    }
+                }
+                allModifiersStartCol = null;
                 startCol = endCol = 0;
             }
 
@@ -402,4 +512,17 @@ public final class ExamplesTokenizer
      *               semanticTokens response
      */
     public record Result(List<Integer> tokens, List<Diagnostic> diagnostics) {}
+
+    public static class PrematureLineEndingException extends Exception
+    {
+        public final int line;
+        public final int col;
+
+        PrematureLineEndingException(int line, int col)
+        {
+            super();
+            this.line = line;
+            this.col = col;
+        }
+    }
 }

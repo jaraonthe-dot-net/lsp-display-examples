@@ -14,10 +14,33 @@ option). The latter gives you quite verbose log output.
 * You have to provide the client/IDE/editor yourself.
 * Then, in your client, open a file for which it utilizes this language server
 (this is often triggered by the file extension).
-* **If the file is empty**, some Inlay Hints will be displayed on the first line,
-which you can select/click/trigger to fill the file with content that the server
-will provide semantic tokens for, showcasing what each different token type (and
-modifier) looks like in your editor.
+* **If the first line is empty**, some Inlay Hints and/or Code Actions will be
+displayed on the first line, which you can select/click/trigger to fill the file
+with content that the server will provide semantic tokens for, showcasing what
+each different token type (and modifier) looks like in your editor.
+* Hover information describes which token type and modifiers are used at this
+location.
+
+### Syntax
+
+This syntax is used by the generator Hints / Code Actions mentioned above. But
+you can also use it manually, if you wish.
+
+The semantic tokens are attached to keywords with the same name. E.g. `namespace`
+will be marked with that semantic token type.
+
+To include modifiers, put them after the token type keyword, separated by ':'.
+E.g. `type:readonly` or `class:abstract:defaultLibrary` (with more than one modifier).
+A shorthand is to use a type keyword followed by ':' and then whitespace - after
+that all modifier keywords used on their own will be combined with that type.
+E.g. `function: declaration static`.
+
+As all modifiers can be combined, and there are currently 10 possible modifiers
+in LSP, there are 1024 possible combinations. In order to show them all, the
+following compact syntax is available: Token type followed by '|'. After that,
+each following character until the end of the line is marked with a different
+modifier combination. E.g. `operator|abcdefghsdfsdvawer...`.
+To know which modifier is used you may use hover.
 
 ## System Requirements
 
