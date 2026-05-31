@@ -437,6 +437,10 @@ public final class ExamplesTokenizer
                             // I.e. Opposite of: parsing first modifier when having a locked token
                             j++;
                         }
+                        if (j >= textLine.length()) {
+                            break;
+                        }
+
                         int modifierStart = j;
                         for (; j < textLine.length() && Character.isAlphabetic(textLine.charAt(j)); j++) ;
                         int modifierEnd = j; // exclusive
